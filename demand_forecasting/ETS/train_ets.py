@@ -1,12 +1,13 @@
 # demand_forecasting/ETS/train_ets.py
 # =============================================================
 """
-Train ETS using YAML config.
+Train ETS using YAML config (GPU-aware version).
 """
 
 import argparse
 from pathlib import Path
 import json
+import torch     # <-- GPU check added
 
 import pandas as pd
 from autogluon.timeseries import TimeSeriesPredictor
@@ -37,6 +38,17 @@ def parse_args():
 
 
 def main():
+    # ---------------------------------------------
+    # GPU CHECK
+    # ---------------------------------------------
+    print("\n================ GPU CHECK ================")
+    print("CUDA available:", torch.cuda.is_available())
+    if torch.cuda.is_available():
+        print("GPU Device:", torch.cuda.get_device_name(0))
+    else:
+        print("⚠ WARNING: GPU NOT AVAILABLE — ETS will run on CPU")
+    print("===========================================\n")
+
     args = parse_args()
     cfg = load_config(args.config)
     seed_everything(cfg.experiment.seed)
@@ -90,16 +102,33 @@ def main():
         }
     }
 
+    # ---------------------------------------------
+    # GPU-AWARE PREDICTOR INITIALIZATION
+    # ---------------------------------------------
+    print("[ETS] Initializing Predictor...")
+
     predictor = TimeSeriesPredictor(
         prediction_length=prediction_length,
         freq=freq,
         eval_metric=cfg.experiment.get("eval_metric", "WQL") if hasattr(cfg.experiment, "eval_metric") else "WQL",
         path=str(output_dir),
+        # This does NOT accelerate ETS but ensures future models use GPU
+        enable_ctx="gpu" if torch.cuda.is_available() else "cpu",
     )
 
+    # ---------------------------------------------
+    # TRAINING
+    # ---------------------------------------------
     print("[ETS] Training ETS...")
-    predictor.fit(train_data=train, hyperparameters=hyperparameters, static_features=static_df)
+    predictor.fit(
+        train_data=train,
+        hyperparameters=hyperparameters,
+        static_features=static_df,
+    )
 
+    # ---------------------------------------------
+    # EVALUATION
+    # ---------------------------------------------
     print("[ETS] Evaluating...")
     results = evaluate_predictions(predictor, test)
     print(results["global"])
@@ -110,6 +139,7 @@ def main():
     pd.Series(results["global"]).to_json(output_dir / "ets_global_metrics.json")
 
     print(f"[ETS] Saved results to {output_dir}")
+    print("🎉 ETS completed (GPU-aware mode)\n")
 
 
 if __name__ == "__main__":
