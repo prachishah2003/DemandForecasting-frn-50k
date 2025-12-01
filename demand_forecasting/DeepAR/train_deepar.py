@@ -123,6 +123,15 @@ def main():
         prediction_length=prediction_length,
         holiday_dates=holiday_dates,
     )
+
+    # ------------------ Downsample to Top-5000 series ------------------
+    print("[DeepAR] Reducing dataset → Top 5,000 item series...")
+
+    item_sales = ts.groupby("item_id")["target"].sum().sort_values(ascending=False)
+    top_items = item_sales.head(5000).index
+
+    ts = ts[ts.item_id.isin(top_items)]
+    print(f"[DeepAR] Filtered dataset shape: {ts.shape}")
     train, test = ts.train_test_split(prediction_length)
 
     # ------------------ DeepAR Hyperparameters -------------
