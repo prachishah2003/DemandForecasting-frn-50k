@@ -77,3 +77,28 @@ def load_frn_for_forecasting(
         timestamp_column="timestamp",
         target_column="target",
     )
+
+# ============================================================
+# Auto-detect Google Colab and reduce dataset size safely
+# ============================================================
+def running_in_colab() -> bool:
+    try:
+        import google.colab  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+MAX_ITEMS_COLAB = 10_000  # reduce to first 10k series ONLY in Colab
+
+if running_in_colab():
+    unique_items = df["item_id"].unique()
+    if len(unique_items) > MAX_ITEMS_COLAB:
+        keep_items = set(unique_items[:MAX_ITEMS_COLAB])
+        df = df[df["item_id"].isin(keep_items)].copy()
+        print(
+            f"[FRN] Colab mode: Reduced dataset to {len(keep_items)} items "
+            f"({len(df):,} rows)"
+        )
+else:
+    print("[FRN] Full dataset loaded (non-Colab environment)")
