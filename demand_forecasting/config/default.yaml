@@ -14,7 +14,7 @@ dataset:
 static_features:
   enable: true
   clusters: 12
-  path: "data/static_features_stage1.parquet"
+  path: "demand_forecasting/data/static_features_stage1.parquet"
 
 holidays:
   enable: false                 # DeepAR script below doesn’t use holiday covariates yet
