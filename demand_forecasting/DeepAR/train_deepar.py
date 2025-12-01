@@ -1,27 +1,23 @@
 # demand_forecasting/DeepAR/train_deepar.py
 # =============================================================
 """
-Train DeepAR on FreshRetailNet with:
-  - YAML config (config/default.yaml)
-  - censored or recovered demand
-  - full covariates (handled automatically)
-  - static features
-  - India holiday calendar
-  - extended evaluation (WAPE, WPE, MAPE, sMAPE, RMSE, MAE, quantiles)
+Train DeepAR on FreshRetailNet-50K with:
+  - Stage-1 feature set (static item-level features)
+  - Support for censored/recovered demand
+  - India holiday flags
+  - AutoGluon 1.4 compatibility
+  - Full evaluation metrics
 """
 
 import argparse
 from pathlib import Path
-
 import pandas as pd
+
 from autogluon.timeseries import TimeSeriesPredictor
 
 from demand_forecasting.common.utils import seed_everything
 from demand_forecasting.common.config_loader import load_config
-from demand_forecasting.common.frn_autogluon_data import (
-    load_frn_for_forecasting,
-    load_freshretailnet_raw,
-)
+from demand_forecasting.common.frn_autogluon_data import load_frn_for_forecasting
 from demand_forecasting.common.static_feature_generator import (
     generate_static_features,
     save_static_features,
@@ -39,28 +35,28 @@ def parse_args():
     p.add_argument(
         "--config",
         default="demand_forecasting/config/default.yaml",
-        help="Path to YAML config file.",
+        help="Path to YAML config file."
     )
     p.add_argument(
         "--output_dir",
         default=None,
-        help="Override output directory. Otherwise uses experiment.output_dir/DeepAR",
+        help="Override output dir (default: cfg.experiment.output_dir/DeepAR)"
     )
     p.add_argument(
         "--generate_static",
         action="store_true",
-        help="Regenerate static features instead of loading.",
+        help="Recompute static features instead of loading from disk."
     )
     p.add_argument(
         "--demand_type",
         choices=["censored", "recovered"],
         default=None,
-        help="Override dataset.demand_type from config.",
+        help="Override config dataset.demand_type"
     )
     p.add_argument(
         "--recovered_path",
         default=None,
-        help="Override dataset.recovered_path from config.",
+        help="Override config dataset.recovered_path"
     )
     return p.parse_args()
 
@@ -76,12 +72,12 @@ def main():
 
     seed_everything(cfg.experiment.seed)
 
-    # Output directory: CLI override > config default
+    # Output directory logic
     base_out = args.output_dir or str(cfg.experiment.output_dir)
     output_dir = Path(base_out) / "DeepAR"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Dataset overrides
+    # Runtime dataset overrides
     demand_type = args.demand_type or cfg.dataset.demand_type
     recovered_path = args.recovered_path or cfg.dataset.recovered_path
     prediction_length = cfg.dataset.prediction_length
@@ -96,21 +92,29 @@ def main():
         )
 
     # ------------------ Static Features -------------------
-    if cfg.static_features.enable:
-        if args.generate_static:
-            print("[DeepAR] Generating static features from raw FRN...")
-            raw_df = load_freshretailnet_raw("train")
-            static_df = generate_static_features(
-                raw_df, n_clusters=cfg.static_features.clusters
-            )
-            save_static_features(static_df, cfg.static_features.path)
-        else:
-            print("[DeepAR] Loading static features from disk...")
-            static_df = load_static_features(cfg.static_features.path)
-    else:
-        static_df = None
+    static_df = None
+    static_cfg = cfg.static_features
 
-    # ------------------ Load FRN dataset ------------------
+    if static_cfg.enable:
+        if args.generate_static or not Path(static_cfg.path).exists():
+            print("[DeepAR] Generating static features from FRN...")
+            # Only load training raw data for static feature gen
+            ts_train = load_frn_for_forecasting(
+                split="train",
+                demand_type=demand_type,
+                recovered_path=recovered_path,
+                prediction_length=prediction_length,
+                holiday_dates=holiday_dates,
+                return_raw_df=True,  # <---- IMPORTANT PATCH
+            )
+            raw_df = ts_train  # already returned raw
+            static_df = generate_static_features(raw_df, n_clusters=static_cfg.clusters)
+            save_static_features(static_df, static_cfg.path)
+        else:
+            print("[DeepAR] Loading static features...")
+            static_df = load_static_features(static_cfg.path)
+
+    # ------------------ Load Time Series Data --------------
     print("[DeepAR] Loading FRN dataset...")
     ts = load_frn_for_forecasting(
         split="train",
@@ -121,29 +125,29 @@ def main():
     )
     train, test = ts.train_test_split(prediction_length)
 
-    # ------------------ Hyperparameters -------------------
+    # ------------------ DeepAR Hyperparameters -------------
     deepar_cfg = cfg.models.deepar.params
-
     hyperparameters = {
         "DeepAR": {
             "learning_rate": float(deepar_cfg.learning_rate),
-            "cell_type": deepar_cfg.cell_type,
             "dropout_rate": float(deepar_cfg.dropout_rate),
             "num_layers": int(deepar_cfg.num_layers),
             "num_cells": int(deepar_cfg.num_cells),
+            "cell_type": deepar_cfg.cell_type,
+            "use_gpu": True,
         }
     }
 
-    # ------------------ Train model -----------------------
+    # ------------------ Train Model -----------------------
     print("[DeepAR] Initializing TimeSeriesPredictor...")
     predictor = TimeSeriesPredictor(
         prediction_length=prediction_length,
         freq=freq,
-        eval_metric="WQL",
         path=str(output_dir),
+        eval_metric="MAPE",
     )
 
-    print("[DeepAR] Training DeepAR...")
+    print("[DeepAR] Training...")
     predictor.fit(
         train_data=train,
         hyperparameters=hyperparameters,
@@ -151,27 +155,26 @@ def main():
     )
 
     # ------------------ Evaluate ---------------------------
-    print("[DeepAR] Evaluating on holdout set...")
+    print("[DeepAR] Evaluating...")
     results = evaluate_predictions(predictor, test)
 
-    print("\n==================== DeepAR Results ====================")
+    # Print global metrics
+    print("\n========== DeepAR Global Metrics ==========")
     print(results["global"])
 
-    # Save per-series metrics
-    per_series_path = output_dir / "deepar_per_series.csv"
-    results["per_series"].to_csv(per_series_path, index=False)
-    print(f"[DeepAR] Saved per-series metrics to: {per_series_path}")
+    # Save results
+    (output_dir / "results").mkdir(exist_ok=True)
 
-    # Save probabilistic metrics
-    prob_path = output_dir / "deepar_probabilistic.json"
-    pd.Series(results["probabilistic"]).to_json(prob_path)
-    print(f"[DeepAR] Saved probabilistic metrics to: {prob_path}")
+    per_series_out = output_dir / "results" / "deepar_per_series.csv"
+    results["per_series"].to_csv(per_series_out, index=False)
 
-    # Save global metrics
-    global_path = output_dir / "deepar_global_metrics.json"
-    pd.Series(results["global"]).to_json(global_path)
-    print(f"[DeepAR] Saved global metrics to: {global_path}")
+    prob_out = output_dir / "results" / "deepar_probabilistic.json"
+    pd.Series(results["probabilistic"]).to_json(prob_out)
 
+    global_out = output_dir / "results" / "deepar_global_metrics.json"
+    pd.Series(results["global"]).to_json(global_out)
+
+    print(f"[DeepAR] Results saved to {output_dir/'results'}")
     print("==========================================================")
 
 
