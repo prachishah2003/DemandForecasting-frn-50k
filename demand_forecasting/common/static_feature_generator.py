@@ -169,9 +169,12 @@ def compute_sequence_aggregates(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(index=df["item_id"].unique())
 
     # Join all aggregated parts on item_id index
-    seq_stats = agg_parts[0]
+    # Ensure first element is a DataFrame
+    seq_stats = agg_parts[0].to_frame() if isinstance(agg_parts[0], pd.Series) else agg_parts[0]
+
     for part in agg_parts[1:]:
-        seq_stats = seq_stats.join(part, how="outer")
+        part_df = part.to_frame() if isinstance(part, pd.Series) else part
+        seq_stats = seq_stats.join(part_df, how="outer")
 
     seq_stats = seq_stats.reset_index()  # bring item_id back as column
     return seq_stats
