@@ -1,3 +1,5 @@
+# demand_forecasting/common/static_feature_generator.py
+# =============================================================
 """
 Static Feature Generator (Patched for FreshRetailNet-50K)
 
@@ -13,6 +15,7 @@ This module:
 - Builds composite item_id = city_store_product
 - Uses sale_amount instead of demand
 - Computes rich per-item statistics
+- Aggregates sequence columns (hours_sale, hours_stock_status) into SCALAR features
 - Handles absence of optional metadata fields gracefully
 - Produces static features for Stage-1 models
 """
@@ -80,6 +83,101 @@ def compute_series_statistics(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------
+# Aggregate sequence columns into SCALAR per-item features
+# (avoids ndarray cells → fixes AutoGluon 1.4 "unhashable ndarray" issues)
+# ---------------------------------------------------------------
+def compute_sequence_aggregates(df: pd.DataFrame) -> pd.DataFrame:
+    df = ensure_item_id(df)
+    agg_parts = []
+
+    # ---- hours_sale: list/array of 24 floats per day ----
+    if "hours_sale" in df.columns:
+        def agg_hours_sale(series: pd.Series) -> pd.Series:
+            # series: all days' hours_sale for one item_id
+            arrays = []
+            for v in series:
+                if v is None:
+                    continue
+                arr = np.asarray(v, dtype=float).reshape(-1)
+                if arr.size > 0:
+                    arrays.append(arr)
+            if not arrays:
+                return pd.Series(
+                    {
+                        "avg_hourly_sale": np.nan,
+                        "max_hourly_sale": np.nan,
+                        "active_hour_fraction": np.nan,
+                    }
+                )
+            all_hours = np.concatenate(arrays)
+            if all_hours.size == 0:
+                return pd.Series(
+                    {
+                        "avg_hourly_sale": np.nan,
+                        "max_hourly_sale": np.nan,
+                        "active_hour_fraction": np.nan,
+                    }
+                )
+            return pd.Series(
+                {
+                    "avg_hourly_sale": float(np.mean(all_hours)),
+                    "max_hourly_sale": float(np.max(all_hours)),
+                    # Fraction of hours with any positive sale
+                    "active_hour_fraction": float(np.mean(all_hours > 0.0)),
+                }
+            )
+
+        hs_stats = df.groupby("item_id")["hours_sale"].apply(agg_hours_sale)
+        # groupby-apply with Series return → DataFrame indexed by item_id
+        agg_parts.append(hs_stats)
+
+    # ---- hours_stock_status: list/array of 24 ints (0/1) per day ----
+    if "hours_stock_status" in df.columns:
+        def agg_hours_stock(series: pd.Series) -> pd.Series:
+            arrays = []
+            for v in series:
+                if v is None:
+                    continue
+                arr = np.asarray(v, dtype=float).reshape(-1)
+                if arr.size > 0:
+                    arrays.append(arr)
+            if not arrays:
+                return pd.Series(
+                    {
+                        "stockout_hour_fraction": np.nan,
+                    }
+                )
+            all_hours = np.concatenate(arrays)
+            if all_hours.size == 0:
+                return pd.Series(
+                    {
+                        "stockout_hour_fraction": np.nan,
+                    }
+                )
+            # Values typically 0/1: fraction of hours out of stock
+            return pd.Series(
+                {
+                    "stockout_hour_fraction": float(np.mean(all_hours > 0.5)),
+                }
+            )
+
+        hs_stock_stats = df.groupby("item_id")["hours_stock_status"].apply(agg_hours_stock)
+        agg_parts.append(hs_stock_stats)
+
+    if not agg_parts:
+        # No sequence columns in this dataframe
+        return pd.DataFrame(index=df["item_id"].unique())
+
+    # Join all aggregated parts on item_id index
+    seq_stats = agg_parts[0]
+    for part in agg_parts[1:]:
+        seq_stats = seq_stats.join(part, how="outer")
+
+    seq_stats = seq_stats.reset_index()  # bring item_id back as column
+    return seq_stats
+
+
+# ---------------------------------------------------------------
 # Price tier classification — FRN does NOT include price field
 # So we fallback to "unknown" for all items
 # ---------------------------------------------------------------
@@ -140,8 +238,11 @@ def derive_product_static_features(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_item_id(df)
 
     # FRN dataset does not include these fields but keep compatibility
-    meta_cols = [c for c in ["category", "subcategory", "brand", "perishability"]
-                 if c in df.columns]
+    meta_cols = [
+        c
+        for c in ["category", "subcategory", "brand", "perishability"]
+        if c in df.columns
+    ]
 
     if not meta_cols:
         return pd.DataFrame({"item_id": df["item_id"].unique()})
@@ -157,8 +258,8 @@ def cluster_time_series(stats: pd.DataFrame, n_clusters: int = 12) -> pd.Series:
         [np.inf, -np.inf], 0
     ).fillna(0)
 
-    # Reduce clusters for small datasets
-    n_clusters = min(n_clusters, len(X))
+    # Reduce clusters for very small datasets
+    n_clusters = max(1, min(n_clusters, len(X)))
 
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     labels = kmeans.fit_predict(X)
@@ -178,6 +279,7 @@ def generate_static_features(df: pd.DataFrame, n_clusters: int = 12) -> pd.DataF
     intermittent = detect_intermittent(stats)
     clusters = cluster_time_series(stats, n_clusters=n_clusters)
     product_meta = derive_product_static_features(df)
+    seq_stats = compute_sequence_aggregates(df)
 
     static_df = (
         stats.join(price_tier, how="left")
@@ -187,7 +289,12 @@ def generate_static_features(df: pd.DataFrame, n_clusters: int = 12) -> pd.DataF
         .reset_index()
     )
 
+    # Join product metadata + sequence-based features
     static_df = static_df.merge(product_meta, on="item_id", how="left")
+
+    if not seq_stats.empty:
+        static_df = static_df.merge(seq_stats, on="item_id", how="left")
+
     return static_df
 
 
