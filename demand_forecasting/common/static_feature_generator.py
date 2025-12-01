@@ -90,96 +90,65 @@ def compute_sequence_aggregates(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_item_id(df)
     agg_parts = []
 
-    # ---- hours_sale: list/array of 24 floats per day ----
+    # ---- hours_sale ----
     if "hours_sale" in df.columns:
         def agg_hours_sale(series: pd.Series) -> pd.Series:
-            # series: all days' hours_sale for one item_id
             arrays = []
             for v in series:
                 if v is None:
                     continue
-                arr = np.asarray(v, dtype=float).reshape(-1)
+                arr = np.asarray(v, dtype=float).flatten()
                 if arr.size > 0:
                     arrays.append(arr)
             if not arrays:
-                return pd.Series(
-                    {
-                        "avg_hourly_sale": np.nan,
-                        "max_hourly_sale": np.nan,
-                        "active_hour_fraction": np.nan,
-                    }
-                )
+                return pd.Series({
+                    "avg_hourly_sale": np.nan,
+                    "max_hourly_sale": np.nan,
+                    "active_hour_fraction": np.nan,
+                })
             all_hours = np.concatenate(arrays)
-            if all_hours.size == 0:
-                return pd.Series(
-                    {
-                        "avg_hourly_sale": np.nan,
-                        "max_hourly_sale": np.nan,
-                        "active_hour_fraction": np.nan,
-                    }
-                )
-            return pd.Series(
-                {
-                    "avg_hourly_sale": float(np.mean(all_hours)),
-                    "max_hourly_sale": float(np.max(all_hours)),
-                    # Fraction of hours with any positive sale
-                    "active_hour_fraction": float(np.mean(all_hours > 0.0)),
-                }
-            )
+            return pd.Series({
+                "avg_hourly_sale": float(np.mean(all_hours)),
+                "max_hourly_sale": float(np.max(all_hours)),
+                "active_hour_fraction": float(np.mean(all_hours > 0)),
+            })
 
-        hs_stats = df.groupby("item_id")["hours_sale"].apply(agg_hours_sale)
-        # groupby-apply with Series return → DataFrame indexed by item_id
-        agg_parts.append(hs_stats)
+        hs = df.groupby("item_id")["hours_sale"].apply(agg_hours_sale)
+        agg_parts.append(hs.to_frame() if isinstance(hs, pd.Series) else hs)
 
-    # ---- hours_stock_status: list/array of 24 ints (0/1) per day ----
+    # ---- hours_stock_status ----
     if "hours_stock_status" in df.columns:
         def agg_hours_stock(series: pd.Series) -> pd.Series:
             arrays = []
             for v in series:
                 if v is None:
                     continue
-                arr = np.asarray(v, dtype=float).reshape(-1)
+                arr = np.asarray(v, dtype=float).flatten()
                 if arr.size > 0:
                     arrays.append(arr)
             if not arrays:
-                return pd.Series(
-                    {
-                        "stockout_hour_fraction": np.nan,
-                    }
-                )
+                return pd.Series({
+                    "stockout_hour_fraction": np.nan,
+                })
             all_hours = np.concatenate(arrays)
-            if all_hours.size == 0:
-                return pd.Series(
-                    {
-                        "stockout_hour_fraction": np.nan,
-                    }
-                )
-            # Values typically 0/1: fraction of hours out of stock
-            return pd.Series(
-                {
-                    "stockout_hour_fraction": float(np.mean(all_hours > 0.5)),
-                }
-            )
+            return pd.Series({
+                "stockout_hour_fraction": float(np.mean(all_hours > 0.5)),
+            })
 
-        hs_stock_stats = df.groupby("item_id")["hours_stock_status"].apply(agg_hours_stock)
-        agg_parts.append(hs_stock_stats)
+        hs_stock = df.groupby("item_id")["hours_stock_status"].apply(agg_hours_stock)
+        agg_parts.append(hs_stock.to_frame() if isinstance(hs_stock, pd.Series) else hs_stock)
 
+    # No sequence fields present
     if not agg_parts:
-        # No sequence columns in this dataframe
-        return pd.DataFrame(index=df["item_id"].unique())
+        return pd.DataFrame({"item_id": df["item_id"].unique()})
 
-    # Join all aggregated parts on item_id index
-    # Ensure first element is a DataFrame
-    seq_stats = agg_parts[0].to_frame() if isinstance(agg_parts[0], pd.Series) else agg_parts[0]
-
+    # Merge all aggregated parts safely
+    seq_stats = agg_parts[0]
     for part in agg_parts[1:]:
-        part_df = part.to_frame() if isinstance(part, pd.Series) else part
-        seq_stats = seq_stats.join(part_df, how="outer")
+        part = part.to_frame() if isinstance(part, pd.Series) else part
+        seq_stats = seq_stats.join(part, how="outer")
 
-    seq_stats = seq_stats.reset_index()  # bring item_id back as column
-    return seq_stats
-
-
+    return seq_stats.reset_index()
 # ---------------------------------------------------------------
 # Price tier classification — FRN does NOT include price field
 # So we fallback to "unknown" for all items
