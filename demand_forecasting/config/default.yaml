@@ -1,105 +1,42 @@
 experiment:
-  seed: 42
-  stage: 1
+  seed: 123
   output_dir: results/stage1
 
 dataset:
-  demand_type: censored            # "censored" or "recovered"
-  recovered_path: null            # provide path if using recovered demand
+  name: "FreshRetailNet-50K"
+  demand_type: "censored"         # or "recovered"
+  recovered_path: null            # only needed if demand_type = recovered
   prediction_length: 7
   freq: "D"
-
-covariates:
-  temporal: true
-
-  lags:
-    enable: true
-    values: [1, 7, 14]
-
-  rolling:
-    enable: true
-    windows: [7, 28]
-
-  price: true
-  promo: true
-  weather: true
-  stock: true
-  holiday: true
-  imputation: true
-
-holidays:
-  enable: true
-  country: "IN"
-  start_year: 2017
-  end_year: 2026
+  test_ratio: null                # using train_test_split(prediction_length)
 
 static_features:
   enable: true
   clusters: 12
-  path: demand_forecasting/static_features/static_features.parquet
+  path: "data/static_features_stage1.parquet"
+
+holidays:
+  enable: true
+  start_year: 2019
+  end_year: 2025
 
 models:
-
-  chronos:
-    enable: true
-    size: "base"          # small, base, large
-    fine_tune:
-      enable: true
-      steps: 1500
-      lr: 1e-4
-
-  patchtst:
-    enable: true
-    params:
-      learning_rate: 0.0005
-      d_model: 64
-      n_heads: 4
-      patch_len: 8
-      stride: 8
-      dropout: 0.1
-      batch_size: 64
-
   deepar:
-    enable: true
     params:
       learning_rate: 0.001
-      cell_type: "gru"
+      cell_type: "lstm"
       dropout_rate: 0.1
       num_layers: 2
-      num_cells: 64
+      num_cells: 40
 
-  nhits:
-    enable: true
-    params:
-      num_stacks: 3
-      num_blocks: 3
-      layer_widths: [128, 64]
-      learning_rate: 0.001
-      batch_size: 64
-
-  ets:
-    enable: true
-    params:
-      seasonal_period: 7
-      trend: "add"
-      seasonal: "add"
-      damped_trend: true
-
-  ensemble:
-    enable: true
-    params:
-      models: "all"
-      epochs: 20
-      max_windows: 5
-
-stage2:
-  enable: true
-  cluster_training: true
-  clusters: 12
-  per_cluster_models: ["Chronos", "PatchTST"]
-
-stage3:
-  enable: true
-  chronos_finetune_per_cluster: true
-  steps: 1500
-  lr: 1e-4
+evaluation:
+  save_per_series: true
+  quantiles: [0.1, 0.5, 0.9]
+  metrics:
+    - MAPE
+    - WAPE
+    - SMAPE
+    - RMSE
+    - MAE
+    - CRPS
+    - WQL
