@@ -4,11 +4,12 @@ experiment:
 
 dataset:
   name: "FreshRetailNet-50K"
-  demand_type: "censored"         # or "recovered"
-  recovered_path: null            # only needed if demand_type = recovered
+  demand_type: "censored"       # keep for future use
+  recovered_path: null          # only needed if using recovered demand
   prediction_length: 7
   freq: "D"
-  test_ratio: null                # using train_test_split(prediction_length)
+  test_ratio: null              # we use train_test_split(prediction_length)
+  max_items: 5000               # cap number of series for Colab
 
 static_features:
   enable: true
@@ -16,18 +17,17 @@ static_features:
   path: "data/static_features_stage1.parquet"
 
 holidays:
-  enable: true
+  enable: false                 # DeepAR script below doesn’t use holiday covariates yet
   start_year: 2019
   end_year: 2025
 
 models:
   deepar:
     params:
-      learning_rate: 0.001
       cell_type: "lstm"
-      dropout_rate: 0.1
+      hidden_size: 40           # used by our script → mapped to DeepAR hidden size
       num_layers: 2
-      num_cells: 40
+      dropout_rate: 0.1
 
 evaluation:
   save_per_series: true
