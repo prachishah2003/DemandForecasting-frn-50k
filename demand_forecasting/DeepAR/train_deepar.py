@@ -1,36 +1,32 @@
 # demand_forecasting/DeepAR/train_deepar.py
 # =============================================================
 """
-Train DeepAR on FreshRetailNet Selected Subset (5000 items)
-- Uses AutoGluon 1.4 API
-- Static features auto-filtered to keep only used item_ids
+Train DeepAR on Reduced FreshRetailNet (5000 series)
+- Uses reduced parquet dataset already saved in Colab
+- Static features automatically filtered to matching item_ids
+- AutoGluon 1.4 API
 """
 
 import argparse
 from pathlib import Path
 import pandas as pd
-from autogluon.timeseries import TimeSeriesPredictor
 
+from autogluon.timeseries import TimeSeriesPredictor
 from demand_forecasting.common.utils import seed_everything
 from demand_forecasting.common.config_loader import load_config
-from demand_forecasting.common.frn_autogluon_data import (
-    load_frn_for_forecasting,
-)
 from demand_forecasting.common.static_feature_generator import (
     generate_static_features,
     save_static_features,
     load_static_features,
 )
 from demand_forecasting.common.holiday_utils import load_india_holidays
+from demand_forecasting.common.frn_autogluon_data import df_to_time_series
 from demand_forecasting.common.frn_autogluon_eval import evaluate_predictions
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument(
-        "--config",
-        default="demand_forecasting/config/default.yaml",
-    )
+    p.add_argument("--config", default="demand_forecasting/config/default.yaml")
     p.add_argument("--generate_static", action="store_true")
     return p.parse_args()
 
@@ -45,8 +41,21 @@ def main():
 
     prediction_length = cfg.dataset.prediction_length
     freq = cfg.dataset.freq
-    max_items = cfg.dataset.max_items or 5000
 
+    # --------------------------------------------------------
+    # Load reduced dataset parquet
+    # --------------------------------------------------------
+    train_path = "demand_forecasting/data/train/frn_train.parquet"
+    print(f"[DeepAR] Loading reduced dataset: {train_path}")
+    df_train = pd.read_parquet(train_path)
+
+    print("[DeepAR] Train dataframe:", df_train.shape)
+    unique_items = df_train["item_id"].unique()
+    print(f"[DeepAR] Unique item_ids: {len(unique_items)}")
+
+    # --------------------------------------------------------
+    # Load India holiday dates (optional)
+    # --------------------------------------------------------
     holiday_dates = None
     if cfg.holidays.enable:
         holiday_dates = load_india_holidays(
@@ -55,71 +64,55 @@ def main():
         )
 
     # --------------------------------------------------------
-    # Load RAW FRN (train split), apply subset filtering FIRST
-    # --------------------------------------------------------
-    print(f"[DeepAR] Loading FRN raw dataset...")
-    df_train = load_frn_for_forecasting(
-        split="train",
-        demand_type=cfg.dataset.demand_type,
-        recovered_path=cfg.dataset.recovered_path,
-        prediction_length=prediction_length,
-        holiday_dates=holiday_dates,
-        return_df=True,
-    ).reset_index()
-
-    unique_items = df_train["item_id"].unique()[:max_items]
-    df_train = df_train[df_train["item_id"].isin(unique_items)]
-    print(f"[DeepAR] Using only first {len(unique_items)} item series")
-
-    # --------------------------------------------------------
     # Static features
     # --------------------------------------------------------
     static_path = cfg.static_features.path
-
     if args.generate_static or not Path(static_path).exists():
         print("[DeepAR] Generating static features...")
         static_df = generate_static_features(df_train)
         save_static_features(static_df, static_path)
-        print(f"Saved static features: {static_path}")
     else:
         print("[DeepAR] Loading static features from disk...")
         static_df = load_static_features(static_path)
-        static_df = static_df[static_df["item_id"].isin(unique_items)]
+
+    # Keep only items in df_train
+    static_df = static_df[static_df["item_id"].isin(unique_items)]
+    print("[DeepAR] Static features:", static_df.shape)
 
     # --------------------------------------------------------
     # Convert to TimeSeriesDataFrame
     # --------------------------------------------------------
-    ts = load_frn_for_forecasting(
-        split="train",
-        demand_type=cfg.dataset.demand_type,
-        recovered_path=cfg.dataset.recovered_path,
+    print("[DeepAR] Converting to TimeSeriesDataFrame...")
+    ts_full = df_to_time_series(
+        df_train,
         prediction_length=prediction_length,
-        holiday_dates=holiday_dates,
-        item_ids=unique_items.tolist(),
+        freq=freq
     )
 
-    train, test = ts.train_test_split(prediction_length)
-    print(f"Train items: {len(train.item_ids)} | Test items: {len(test.item_ids)}")
+    train, test = ts_full.train_test_split(prediction_length)
+    print(f"Train items: {len(train.item_ids)}  |  Test items: {len(test.item_ids)}")
 
+    # --------------------------------------------------------
+    # Train
     # --------------------------------------------------------
     print("[DeepAR] Training model...")
     predictor = TimeSeriesPredictor(
         prediction_length=prediction_length,
         freq=freq,
-        path=str(output_dir),
         eval_metric="WQL",
+        path=str(output_dir),
     )
 
-    hyperparameters = {
-        "DeepAR": cfg.models.deepar.params.to_dict(),
-    }
+    hyperparams = {"DeepAR": dict(cfg.models.deepar.params)}
 
     predictor.fit(
         train_data=train,
-        hyperparameters=hyperparameters,
-        static_features=static_df,
+        hyperparameters=hyperparams,
+        static_features=static_df
     )
 
+    # --------------------------------------------------------
+    # Evaluate
     # --------------------------------------------------------
     print("[DeepAR] Evaluating...")
     results = evaluate_predictions(predictor, test)
@@ -129,7 +122,7 @@ def main():
     pd.Series(results["global"]).to_json(output_dir / "global_metrics.json")
     pd.Series(results["probabilistic"]).to_json(output_dir / "prob.json")
 
-    print("[DeepAR] Done!")
+    print("\n======== TRAINING COMPLETE =========")
 
 
 if __name__ == "__main__":
