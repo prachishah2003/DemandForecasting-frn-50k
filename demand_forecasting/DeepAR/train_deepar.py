@@ -204,8 +204,12 @@ def main():
 
     # ----------------- Evaluation -----------------
     print("📊 Evaluating with frn_autogluon_eval...")
-    results = evaluate_predictions(predictor, test_ts)
-
+    # IMPORTANT: tell the eval helper that test_ts is already the test split
+    results = evaluate_predictions(
+        predictor,
+        test_ts,
+        assume_already_aligned=True,  # <- you add this flag in frn_autogluon_eval
+    )
     # Save results
     metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir(exist_ok=True)
