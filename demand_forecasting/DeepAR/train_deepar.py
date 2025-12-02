@@ -211,6 +211,7 @@ def main():
     # IMPORTANT: tell the eval helper that test_ts is already the test split
     results = evaluate_predictions(
         predictor,
+        train_ts,
         test_ts,
         assume_already_aligned=True,  # <- you add this flag in frn_autogluon_eval
     )
