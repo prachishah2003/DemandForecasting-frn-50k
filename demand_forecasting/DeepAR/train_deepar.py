@@ -153,8 +153,13 @@ def main():
     )
 
     # ----------------- Train / Test split -----------------
-    train_ts, test_ts = ts.train_test_split(prediction_length=prediction_length)
-    print(f"TS Train shape: {train_ts.shape}, TS Test shape: {test_ts.shape}")
+    #train_ts, test_ts = ts.train_test_split(prediction_length=prediction_length)
+    #print(f"TS Train shape: {train_ts.shape}, TS Test shape: {test_ts.shape}")
+    # Use end= and start= instead of Python slice()
+    train_ts = ts.slice_by_timestep(end=-prediction_length)
+    test_ts = ts.slice_by_timestep(start=-prediction_length)
+
+    print(f"Train shape: {train_ts.shape} | Test shape: {test_ts.shape}")
     print(f"Train series: {len(train_ts.item_ids)} | Test series: {len(test_ts.item_ids)}")
 
     # ----------------- Train DeepAR via AutoGluon -----------------
