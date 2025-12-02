@@ -213,7 +213,6 @@ def main():
         predictor,
         train_ts,
         test_ts,
-        assume_already_aligned=True,  # <- you add this flag in frn_autogluon_eval
     )
     # Save results
     metrics_dir = output_dir / "metrics"
