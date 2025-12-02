@@ -1,19 +1,17 @@
 """
 Evaluation utilities for FreshRetailNet + AutoGluon Timeseries.
 
-- Proper alignment using item_id + timestamp
-- Uses train_ts for prediction (forecasts last prediction_length steps)
-- Full global + per-series metrics
-- Probabilistic metrics placeholder
+✔ Stable alignment using item_id + timestamp
+✔ Works with AutoGluon 1.4 predictor.predict()
+✔ Supports global + per-series metrics
 """
 
-import numpy as np
 import pandas as pd
+import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from autogluon.timeseries import TimeSeriesPredictor
 
 
-# ---------------------- basic metrics ----------------------
+# ---------------- Metrics ----------------
 def wape(y_true, y_pred):
     return np.sum(np.abs(y_true - y_pred)) / (np.sum(np.abs(y_true)) + 1e-8)
 
@@ -39,88 +37,66 @@ def rmse(y_true, y_pred):
     return np.sqrt(mean_squared_error(y_true, y_pred))
 
 
-# ---------------------- evaluation ----------------------
-def evaluate_predictions(
-    predictor: TimeSeriesPredictor,
-    train_ts,
-    test_ts,
-):
+# ---------------- Evaluation ----------------
+def evaluate_predictions(pred_df: pd.DataFrame, test_ts):
     """
-    Evaluate DeepAR / AG predictor.
-
-    IMPORTANT:
-    - We pass train_ts to predictor.predict(), not test_ts.
-      This way, forecasts correspond exactly to the held-out
-      last prediction_length steps in test_ts.
+    pred_df -> output of predictor.predict(train_ts)
+    test_ts -> TimeSeriesDataFrame (truth)
     """
-    # Forecast future horizon from the end of TRAIN series
-    preds = predictor.predict(train_ts)  # no include_history here
 
-    # Convert to tabular form
     df_true = test_ts.to_data_frame().reset_index()
-    df_pred = preds.to_data_frame().reset_index()
 
-    # Rename timestamp consistently
-    df_true = df_true.rename(columns={"timestamp": "dt"})
+    # Predictor output DF
+    df_pred = pred_df.reset_index()
     df_pred = df_pred.rename(columns={"timestamp": "dt"})
 
-    # Merge on item_id + dt (they should match: last pred_len timestamps)
+    # Align truth DF
+    df_true = df_true.reset_index()
+    df_true = df_true.rename(columns={"timestamp": "dt"})
+
+    # AutoGluon renames predicted target column to "mean"
+    pred_col = "mean" if "mean" in df_pred.columns else df_pred.columns[-1]
+    true_col = "target" if "target" in df_true.columns else df_true.columns[-1]
+
     merged = pd.merge(
-        df_true,
-        df_pred,
+        df_true[["item_id", "dt", true_col]],
+        df_pred[["item_id", "dt", pred_col]],
         on=["item_id", "dt"],
-        how="inner",
-        suffixes=("_true", "_pred"),
+        how="inner"
     )
 
-    if len(merged) == 0:
-        raise RuntimeError(
-            "No overlapping rows between truth and predictions after merge. "
-            "Check that train_ts / test_ts come from ts.train_test_split(prediction_length)."
-        )
-
-    # Determine correct column names for true/pred
-    true_col = "target_true" if "target_true" in merged.columns else "target"
-    pred_col = "target_pred" if "target_pred" in merged.columns else merged.filter(like="_pred").columns[0]
+    if merged.empty:
+        raise RuntimeError("⚠ No overlapping timestamps between prediction and truth!")
 
     y_true = merged[true_col].values
     y_pred = merged[pred_col].values
 
-    # --------- global metrics ---------
+    # Global metrics
     global_metrics = {
         "WAPE": wape(y_true, y_pred),
         "WPE": wpe(y_true, y_pred),
-        "MAPE": np.mean(np.abs((y_true - y_pred) / (y_true + 1e-8))),
         "sMAPE": smape(y_true, y_pred),
         "RMSE": rmse(y_true, y_pred),
         "MAE": mae(y_true, y_pred),
     }
 
-    # --------- per-series metrics ---------
-    per_series_rows = []
-    for item_id, g in merged.groupby("item_id"):
-        y_t = g["target_true"].values
-        y_p = g["target_pred"].values
-        per_series_rows.append(
-            {
-                "item_id": item_id,
-                "WAPE": wape(y_t, y_p),
-                "MAPE": np.mean(np.abs((y_t - y_p) / (y_t + 1e-8))),
-                "sMAPE": smape(y_t, y_p),
-                "RMSE": rmse(y_t, y_p),
-                "MAE": mae(y_t, y_p),
-            }
-        )
+    # Per-series metrics
+    per_series = []
+    for item, g in merged.groupby("item_id"):
+        yt = g[true_col].values
+        yp = g[pred_col].values
+        per_series.append({
+            "item_id": item,
+            "WAPE": wape(yt, yp),
+            "sMAPE": smape(yt, yp),
+            "RMSE": rmse(yt, yp),
+            "MAE": mae(yt, yp),
+        })
 
-    per_series_df = pd.DataFrame(per_series_rows)
-
-    # --------- probabilistic placeholder ---------
-    probabilistic_metrics = {
-        "quantiles_supported": True,
-    }
+    probabilistic_metrics = {"note": "DeepAR default mean metric only"}
 
     return {
         "global": global_metrics,
-        "per_series": per_series_df,
+        "per_series": pd.DataFrame(per_series),
         "probabilistic": probabilistic_metrics,
     }
