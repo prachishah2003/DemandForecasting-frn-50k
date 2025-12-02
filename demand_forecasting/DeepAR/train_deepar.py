@@ -201,7 +201,7 @@ def main():
         "DeepAR": deepar_params,
     }
 
-    predictor.fit(train_ts, hyperparameters=hp)
+    predictor.fit(train_ts, hyperparameters=hyperparameters)
 
     # ========= Evaluation =========
     print("\n📊 Evaluating...")
