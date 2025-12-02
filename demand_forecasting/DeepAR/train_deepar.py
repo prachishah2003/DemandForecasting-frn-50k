@@ -153,10 +153,10 @@ def main():
     )
 
     # ----------------- Train / Test split -----------------
-    #train_ts, test_ts = ts.train_test_split(prediction_length=prediction_length)
+    train_ts, test_ts = ts.train_test_split(prediction_length=prediction_length)
     #print(f"TS Train shape: {train_ts.shape}, TS Test shape: {test_ts.shape}")
-    train_ts = ts.slice_by_timestep(None, -prediction_length)      # up to -prediction_length
-    test_ts = ts.slice_by_timestep(-prediction_length, None)       # last prediction_length steps
+    #train_ts = ts.slice_by_timestep(None, -prediction_length)      # up to -prediction_length
+    #test_ts = ts.slice_by_timestep(-prediction_length, None)       # last prediction_length steps
 
     print(f"Train shape: {train_ts.shape} | Test shape: {test_ts.shape}")
     print(f"Train series: {len(train_ts.item_ids)} | Test series: {len(test_ts.item_ids)}")
@@ -201,31 +201,23 @@ def main():
         "DeepAR": deepar_params,
     }
 
-    predictor.fit(
-        train_data=train_ts,
-        hyperparameters=hyperparameters,
-    )
+    predictor.fit(train_ts, hyperparameters=hp)
 
-    # ----------------- Evaluation -----------------
-    print("📊 Evaluating with frn_autogluon_eval...")
-    # IMPORTANT: tell the eval helper that test_ts is already the test split
-    results = evaluate_predictions(
-        predictor,
-        train_ts,
-        test_ts,
-    )
-    # Save results
-    metrics_dir = output_dir / "metrics"
-    metrics_dir.mkdir(exist_ok=True)
+    # ========= Evaluation =========
+    print("\n📊 Evaluating...")
+    preds = predictor.predict(train_ts)
+    results = evaluate_predictions(preds, test_ts)
 
-    results["per_series"].to_csv(metrics_dir / "per_series.csv", index=False)
-    pd.Series(results["global"]).to_json(metrics_dir / "global.json")
-    pd.Series(results["probabilistic"]).to_json(metrics_dir / "probabilistic.json")
+    metrics = output_dir / "metrics"
+    metrics.mkdir(exist_ok=True)
+    results["per_series"].to_csv(metrics / "per_series.csv", index=False)
+    pd.Series(results["global"]).to_json(metrics / "global.json")
+    pd.Series(results["probabilistic"]).to_json(metrics / "probabilistic.json")
 
-    print("\n🎯 Global metrics:")
-    print(results["global"])
-    print("\n📁 Saved results inside:", metrics_dir)
-    print("\n[✔] DeepAR training complete!")
+    print("\n🎯 Global Metrics:", results["global"])
+    print("📁 Results saved to:", metrics)
+
+
 
 
 if __name__ == "__main__":
