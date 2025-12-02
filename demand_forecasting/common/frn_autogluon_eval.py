@@ -79,8 +79,12 @@ def evaluate_predictions(
             "Check that train_ts / test_ts come from ts.train_test_split(prediction_length)."
         )
 
-    y_true = merged["target_true"].values
-    y_pred = merged["target_pred"].values
+    # Determine correct column names for true/pred
+    true_col = "target_true" if "target_true" in merged.columns else "target"
+    pred_col = "target_pred" if "target_pred" in merged.columns else merged.filter(like="_pred").columns[0]
+
+    y_true = merged[true_col].values
+    y_pred = merged[pred_col].values
 
     # --------- global metrics ---------
     global_metrics = {
