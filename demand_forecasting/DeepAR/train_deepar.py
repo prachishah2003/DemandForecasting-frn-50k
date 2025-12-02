@@ -114,21 +114,27 @@ def main():
     print("After expanding hourly cols:", df.shape)
 
     # ----------------- Static features as separate DataFrame -----------------
-    static_df = None
-    if getattr(cfg.static_features, "enable", False) and static_path.exists():
+       # Convert static_df to proper static feature format
+    if cfg.static_features.enable and static_path.exists():
         print("📌 Loading static features...")
         static_df = load_static_features(static_path)
 
-        if "item_id" not in static_df.columns:
-            raise ValueError("Static features parquet must contain 'item_id' column.")
-
-        # Filter to the same item_ids and set index as item_id
+    # Keep only item_ids used in this training subset
         static_df = static_df[static_df["item_id"].isin(unique_items)].copy()
-        static_df = static_df.set_index("item_id")
 
-        print("Static DF shape (per item_id):", static_df.shape)
+    # Drop hourly features accidentally inside static (if any)
+        bad_cols = [c for c in static_df.columns if "hour" in c]
+        if bad_cols:
+            print(f"⚠ Removing hourly columns from static: {bad_cols}")
+            static_df = static_df.drop(columns=bad_cols)
+
+    # Ensure one row per item_id
+        static_df = static_df.groupby("item_id").first().reset_index()
+
+        print("Static DF after cleanup:", static_df.shape)
     else:
-        print("⚠ STATIC DISABLED — using no static_features_df")
+        print("⚠ Static features disabled or missing")
+        static_df = None
 
     # ----------------- Build TimeSeriesDataFrame -----------------
     # Rename target
