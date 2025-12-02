@@ -49,16 +49,26 @@ def rmse(y_true, y_pred):
 # -----------------------------------------------------------
 # Evaluation
 # -----------------------------------------------------------
-def evaluate_predictions(predictor: TimeSeriesPredictor, test_ts):
-    """Compute all metrics and handle index safely."""
+def evaluate_predictions(
+    predictor: TimeSeriesPredictor,
+    test_ts,
+    assume_already_aligned: bool = False,
+):
+    """
+    If `assume_already_aligned=True`, the test_ts provided is already the true
+    test window from train_test_split → skip internal slicing.
+    """
+    print(f"[Eval] assume_already_aligned={assume_already_aligned}")
+
+    # Direct prediction on provided test window
     preds = predictor.predict(test_ts)
 
-    # Convert to tabular alignment
+    # Convert to dataframes safely
     df_true = test_ts.to_data_frame().reset_index()
     df_pred = preds.to_data_frame().reset_index()
 
-    df_true = df_true.rename(columns={"timestamp": "dt"})
-    df_pred = df_pred.rename(columns={"timestamp": "dt"})
+    df_true = df_true.rename(columns={"timestamp": "dt", "target": "target_true"})
+    df_pred = df_pred.rename(columns={"timestamp": "dt", "target": "target_pred"})
 
     # Merge on item_id + timestamp explicitly
     merged = pd.merge(
@@ -66,15 +76,18 @@ def evaluate_predictions(predictor: TimeSeriesPredictor, test_ts):
         df_pred,
         on=["item_id", "dt"],
         how="inner",
-        suffixes=("_true", "_pred")
     )
 
     if len(merged) == 0:
-        raise RuntimeError("No overlapping rows between truth and predictions after merge.")
+        raise RuntimeError(
+            "No overlapping rows between truth and predictions after merge. "
+            "Check timestamp alignment."
+        )
 
     y_true = merged["target_true"].values
     y_pred = merged["target_pred"].values
 
+    # ---------- Global Metrics ----------
     global_metrics = {
         "WAPE": wape(y_true, y_pred),
         "WPE": wpe(y_true, y_pred),
@@ -84,28 +97,24 @@ def evaluate_predictions(predictor: TimeSeriesPredictor, test_ts):
         "MAE": mae(y_true, y_pred),
     }
 
-    # Per-series metrics
-    per_series = []
+    # ---------- Per Series Metrics ----------
+    per_series_rows = []
     for item_id, g in merged.groupby("item_id"):
-        y_t = g["target_true"]
-        y_p = g["target_pred"]
-        per_series.append(
-            {
-                "item_id": item_id,
-                "WAPE": wape(y_t, y_p),
-                "MAPE": np.mean(np.abs((y_t - y_p) / (y_t + 1e-8))),
-                "sMAPE": smape(y_t, y_p),
-                "RMSE": rmse(y_t, y_p),
-                "MAE": mae(y_t, y_p),
-            }
-        )
+        yt = g["target_true"]
+        yp = g["target_pred"]
+        per_series_rows.append({
+            "item_id": item_id,
+            "WAPE": wape(yt, yp),
+            "MAPE": np.mean(np.abs((yt - yp) / (yt + 1e-8))),
+            "sMAPE": smape(yt, yp),
+            "RMSE": rmse(yt, yp),
+            "MAE": mae(yt, yp),
+        })
 
-    per_series_df = pd.DataFrame(per_series)
+    per_series_df = pd.DataFrame(per_series_rows)
 
-    # Probabilistic metrics placeholder (extend later)
-    probabilistic_metrics = {
-        "quantiles_supported": True,
-    }
+    # ---------- Probabilistic Metrics Placeholder ----------
+    probabilistic_metrics = {"quantiles_supported": True}
 
     return {
         "global": global_metrics,
