@@ -155,9 +155,8 @@ def main():
     # ----------------- Train / Test split -----------------
     #train_ts, test_ts = ts.train_test_split(prediction_length=prediction_length)
     #print(f"TS Train shape: {train_ts.shape}, TS Test shape: {test_ts.shape}")
-    # Use end= and start= instead of Python slice()
-    train_ts = ts.slice_by_timestep(end=-prediction_length)
-    test_ts = ts.slice_by_timestep(start=-prediction_length)
+    train_ts = ts.slice_by_timestep(None, -prediction_length)      # up to -prediction_length
+    test_ts = ts.slice_by_timestep(-prediction_length, None)       # last prediction_length steps
 
     print(f"Train shape: {train_ts.shape} | Test shape: {test_ts.shape}")
     print(f"Train series: {len(train_ts.item_ids)} | Test series: {len(test_ts.item_ids)}")
