@@ -61,7 +61,7 @@ def evaluate_predictions(
     print(f"[Eval] assume_already_aligned={assume_already_aligned}")
 
     # Direct prediction on provided test window
-    preds = predictor.predict(test_ts)
+    preds = predictor.predict(test_ts, include_history=True)
 
     # Convert to dataframes safely
     df_true = test_ts.to_data_frame().reset_index()
